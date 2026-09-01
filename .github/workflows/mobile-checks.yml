@@ -26,7 +26,7 @@ jobs:
       run:
         working-directory: apps/mobile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Toolchain versions come from the root mise.toml — the same pins as
       # local dev. Only node is needed here; pnpm stays on Corepack, pinned

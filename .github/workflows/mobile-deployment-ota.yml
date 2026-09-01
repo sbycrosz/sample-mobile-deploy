@@ -59,7 +59,7 @@ jobs:
       # Only the one file — the publish job does the real checkout. This is
       # here so the version can appear in the job name (`run-name` is
       # evaluated before any checkout exists).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: apps/mobile/package.json
           sparse-checkout-cone-mode: false
@@ -87,7 +87,7 @@ jobs:
       run:
         working-directory: apps/mobile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # fastlane derives the build number via `git rev-list --count HEAD`:
           # fetch the full commit graph, but skip historical trees/blobs
@@ -157,7 +157,8 @@ jobs:
             echo "|---|---|"
             echo "| Environment | \`${{ inputs.environment }}\` |"
             echo "| Platform | \`${{ matrix.platform }}\` |"
-            echo "| Version | \`${version}\` (build \`${build}\`) |"
+            echo "| Version | \`${version}\` |"
+            echo "| Build | \`${build}\` |"
             echo "| Branch | \`${{ github.ref_name }}\` |"
             echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
