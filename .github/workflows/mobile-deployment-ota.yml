@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       platforms: ${{ steps.matrix.outputs.platforms }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       # Advisory fail-fast only — the dispatcher controls the ref. Real
       # enforcement is each environment's deployment branch policy, applied
@@ -55,11 +56,24 @@ jobs:
             echo 'platforms=["${{ inputs.platform }}"]' >> "$GITHUB_OUTPUT"
           fi
 
+      # Only the one file — the publish job does the real checkout. This is
+      # here so the version can appear in the job name (`run-name` is
+      # evaluated before any checkout exists).
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: apps/mobile/package.json
+          sparse-checkout-cone-mode: false
+
+      - name: Read app version
+        id: version
+        run: echo "version=$(jq -r .version apps/mobile/package.json)" >> "$GITHUB_OUTPUT"
+
   checks:
     needs: guard
     uses: ./.github/workflows/mobile-checks.yml
 
   publish:
+    name: publish v${{ needs.guard.outputs.version }} · ${{ matrix.platform }} · ${{ inputs.environment }}
     needs: [guard, checks]
     timeout-minutes: 30
     runs-on: ubuntu-latest
