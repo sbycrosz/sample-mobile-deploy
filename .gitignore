@@ -1,0 +1,4 @@
+node_modules/
+apps/mobile/vendor/
+apps/mobile/.bundle/
+apps/mobile/fastlane/report.xml

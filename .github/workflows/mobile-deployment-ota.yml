@@ -1,0 +1,148 @@
+name: Mobile OTA
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        type: choice
+        required: true
+        options:
+          - dev
+          - prod
+      platform:
+        description: 'Platform(s) to publish'
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - ios
+          - android
+
+# Never cancel a half-published release; queue runs per environment instead
+concurrency:
+  group: mobile-deployment-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.matrix.outputs.platforms }}
+    steps:
+      # Advisory fail-fast only — the dispatcher controls the ref. Real
+      # enforcement is each environment's deployment branch policy, applied
+      # when `publish` requests its secrets; this just fails in 5s instead
+      # of 10 minutes into the checks.
+      - name: Publishes run only from development
+        if: github.ref_name != 'development'
+        run: |
+          echo "::error::OTA publishes must run from the development branch, not ${{ github.ref_name }}"
+          exit 1
+
+      - name: Emit platform matrix
+        id: matrix
+        run: |
+          if [ "${{ inputs.platform }}" = "all" ]; then
+            echo 'platforms=["ios","android"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'platforms=["${{ inputs.platform }}"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  checks:
+    needs: guard
+    uses: ./.github/workflows/mobile-checks.yml
+
+  publish:
+    needs: [guard, checks]
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    environment: mobile-deployment-${{ inputs.environment }}
+    strategy:
+      # a failure on one platform must not cancel the other mid-publish
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.guard.outputs.platforms) }}
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # fastlane derives the build number via `git rev-list --count HEAD`:
+          # fetch the full commit graph, but skip historical trees/blobs
+          fetch-depth: 0
+          filter: tree:0
+
+      # Toolchain versions come from the root mise.toml — the same pins as
+      # local dev. (Its DEVELOPER_DIR points at a macOS Xcode; inert on Linux.)
+      # pnpm stays on Corepack, pinned by `packageManager` in the root
+      # package.json.
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: node ruby
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Enable Corepack (pnpm)
+        run: corepack enable
+        working-directory: .
+
+      - name: Locate pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        working-directory: .
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter pave-mobile...
+        working-directory: .
+
+      # mise.toml in the key: native gems must rebuild when the ruby pin moves
+      - uses: actions/cache@v4
+        with:
+          path: apps/mobile/vendor/bundle
+          key: bundle-${{ runner.os }}-${{ hashFiles('mise.toml', 'apps/mobile/Gemfile.lock') }}
+          restore-keys: bundle-${{ runner.os }}-
+
+      - name: Install fastlane (bundler)
+        env:
+          BUNDLE_FROZEN: 'true'
+        run: |
+          bundle config set --local path vendor/bundle
+          bundle install --jobs 4
+
+      - name: Publish OTA (${{ matrix.platform }} · ${{ inputs.environment }})
+        run: bundle exec fastlane ${{ matrix.platform }} publish_ota env:${{ inputs.environment }}
+        env:
+          REVOPUSH_API_TOKEN: ${{ secrets.REVOPUSH_API_TOKEN }}
+          REVOPUSH_PRIVATE_KEY_BASE64: ${{ secrets.REVOPUSH_PRIVATE_KEY_BASE64 }}
+          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
+          POSTHOG_CLI_PROJECT_ID: ${{ secrets.POSTHOG_CLI_PROJECT_ID }}
+          POSTHOG_CLI_HOST: ${{ secrets.POSTHOG_CLI_HOST }}
+
+      - name: Release summary
+        run: |
+          version=$(node -p "require('./package.json').version")
+          build=$(git rev-list --count HEAD)
+          {
+            echo "## OTA published"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Environment | \`${{ inputs.environment }}\` |"
+            echo "| Platform | \`${{ matrix.platform }}\` |"
+            echo "| Version | \`${version}\` (build \`${build}\`) |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

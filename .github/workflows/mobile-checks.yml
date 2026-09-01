@@ -1,0 +1,75 @@
+name: Mobile Checks
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+  pull_request:
+    paths:
+      - 'apps/mobile/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'patches/**'
+      - 'mise.toml'
+      - '.github/workflows/mobile-checks.yml'
+
+concurrency:
+  group: mobile-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      # Toolchain versions come from the root mise.toml — the same pins as
+      # local dev. Only node is needed here; pnpm stays on Corepack, pinned
+      # by `packageManager` in the root package.json.
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: node
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Enable Corepack (pnpm)
+        run: corepack enable
+        working-directory: .
+
+      - name: Locate pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        working-directory: .
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter pave-mobile...
+        working-directory: .
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: i18n catalogs up to date
+        run: pnpm i18n:check
+
+      - name: Theme assets up to date
+        run: pnpm assets:check
+
+      - name: Icons up to date
+        run: pnpm icons:check
+
+      - name: Unit tests
+        run: pnpm test
